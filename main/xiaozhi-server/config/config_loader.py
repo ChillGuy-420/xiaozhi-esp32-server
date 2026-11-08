@@ -23,23 +23,27 @@ def read_config(config_path):
     return config
 
 
-async def load_config():
+async def load_config(default_config_path=None, custom_config_path=None):
     """加载配置文件"""
     from core.utils.cache.manager import cache_manager, CacheType
+    from core.isolation.profile import isolation_requested, prepare_runtime_config
 
     # 检查缓存
     cached_config = cache_manager.get(CacheType.CONFIG, "main_config")
-    if cached_config is not None:
+    if cached_config is not None and default_config_path is None and custom_config_path is None:
         return cached_config
 
-    default_config_path = get_project_dir() + "config.yaml"
-    custom_config_path = get_project_dir() + "data/.config.yaml"
+    default_config_path = default_config_path or (get_project_dir() + "config.yaml")
+    custom_config_path = custom_config_path or (get_project_dir() + "data/.config.yaml")
 
     # 加载默认配置
     default_config = read_config(default_config_path)
     custom_config = read_config(custom_config_path)
 
-    if custom_config.get("manager-api", {}).get("url"):
+    # 隔离模式只合并本地文件，不读取智控台，避免带入其他账号的私有配置。
+    if isolation_requested(default_config) or isolation_requested(custom_config):
+        config = prepare_runtime_config(default_config, custom_config)
+    elif custom_config.get("manager-api", {}).get("url"):
         config = await get_config_from_api_async(custom_config)
     else:
         # 合并配置

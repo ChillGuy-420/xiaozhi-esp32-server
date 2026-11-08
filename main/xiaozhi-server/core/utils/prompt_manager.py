@@ -126,7 +126,12 @@ class PromptManager:
             )
             self.logger.bind(tag=TAG).debug(f"设备 {device_id} 的提示词已缓存")
 
-        self.logger.bind(tag=TAG).info(f"使用快速提示词: {user_prompt[:50]}...")
+        from core.isolation.profile import isolation_active
+
+        if isolation_active(self.config):
+            self.logger.bind(tag=TAG).info("isolated prompt ready")
+        else:
+            self.logger.bind(tag=TAG).info(f"使用快速提示词: {user_prompt[:50]}...")
         return user_prompt
 
     def _get_current_time_info(self) -> tuple:

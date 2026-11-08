@@ -35,6 +35,13 @@ server:
     # 如果属于白名单内的设备，不校验token，直接放行
     allowed_devices:
       - "11:22:33:44:55:66"
+  # 隔离语音档默认关闭，关闭时行为与上游一致。
+  # 启用方式：环境变量 XIAOZHI_ISOLATED_PROFILE=1，或把 enabled 设为 true。
+  # 启用后必须同时提供 XIAOZHI_AUTH_KEY 与 XIAOZHI_ISOLATED_DEVICES_FILE。
+  # 设备清单只写 credential_env 名称，不能写密钥。非 loopback 绑定会被拒绝。
+  # 本档不实现 TLS，也不连接外部语音供应商，直到另外核准并改配置。
+  isolated_profile:
+    enabled: false
  # MQTT网关配置，用于通过OTA下发到设备，根据mqtt_gateway的.env文件配置，格式为host:port
   mqtt_gateway: null
   # MQTT签名密钥，用于生成MQTT连接密码，根据mqtt_gateway的.env文件配置

@@ -14,6 +14,7 @@ from core.providers.tts.dto.dto import SentenceType
 from core.utils.wakeup_word import WakeupWordsConfig
 from core.handle.sendAudioHandle import sendAudioMessage, send_tts_message
 from core.utils.util import remove_punctuation_and_length, opus_datas_to_wav_bytes
+from core.isolation.profile import isolation_active
 from core.providers.tools.device_mcp import (
     MCPClient,
     send_mcp_initialize_message,
@@ -54,6 +55,9 @@ async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
         conn.audio_format = format
         conn.welcome_msg["audio_params"] = audio_params
     features = msg_json.get("features")
+    if isolation_active(conn.config):
+        features = None
+        conn.features = {"mcp": False}
     if features:
         conn.logger.bind(tag=TAG).debug(f"客户端特性: {features}")
         conn.features = features

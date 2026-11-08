@@ -5,7 +5,7 @@ from config.logger import setup_logging
 class BaseHandler:
     def __init__(self, config: dict):
         self.config = config
-        self.logger = setup_logging()
+        self.logger = setup_logging(config)
 
     def _add_cors_headers(self, response):
         """添加CORS头信息"""

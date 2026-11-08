@@ -48,6 +48,9 @@ def formatter(record):
 
 def setup_logging(config=None):
     """从配置文件中读取日志配置，并设置日志输出格式和级别"""
+    global _logger_initialized
+    if _logger_initialized:
+        return logger
     if config is None:
         check_config_file()
         # 先查缓存，避免在 async 上下文中重复 await load_config
@@ -56,7 +59,6 @@ def setup_logging(config=None):
             # 缓存也没有（理论上不该发生），才走 asyncio.run
             config = asyncio.run(load_config())
     log_config = config["log"]
-    global _logger_initialized
 
     # 第一次初始化时配置日志
     if not _logger_initialized:
@@ -97,6 +99,12 @@ def setup_logging(config=None):
         log_file_path = os.path.join(log_dir, log_file)
 
         # 添加日志处理器
+        isolated_log = os.environ.get("XIAOZHI_ISOLATED_PROFILE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         logger.add(
             log_file_path,
             format=log_format_file,
@@ -106,9 +114,9 @@ def setup_logging(config=None):
             retention="30 days",  # 保留30天
             compression=None,
             encoding="utf-8",
-            enqueue=True,  # 异步安全
-            backtrace=True,
-            diagnose=True,
+            enqueue=not isolated_log,
+            backtrace=not isolated_log,
+            diagnose=not isolated_log,
         )
         _logger_initialized = True  # 标记为已初始化
 

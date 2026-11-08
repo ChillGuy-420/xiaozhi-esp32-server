@@ -11,6 +11,7 @@ from core.handle.helloHandle import checkWakeupWords
 from plugins_func.register import Action, ActionResponse
 from core.handle.sendAudioHandle import send_stt_message
 from core.handle.reportHandle import enqueue_tool_report
+from core.isolation.profile import isolation_active
 from core.utils.util import remove_punctuation_and_length
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
 
@@ -18,6 +19,8 @@ TAG = __name__
 
 
 async def handle_user_intent(conn: "ConnectionHandler", text):
+    if isolation_active(conn.config):
+        return False
     # 预处理输入文本，处理可能的JSON格式
     try:
         if text.strip().startswith("{") and text.strip().endswith("}"):

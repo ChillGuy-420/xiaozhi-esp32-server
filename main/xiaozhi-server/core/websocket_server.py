@@ -33,6 +33,12 @@ _setup_websockets_logger()
 from core.connection import ConnectionHandler
 from config.config_loader import get_config_from_api_async
 from core.auth import AuthManager, AuthenticationError
+from core.isolation.profile import (
+    IsolatedProfileError,
+    get_registry,
+    isolation_active,
+    isolation_required,
+)
 from core.utils.modules_initialize import initialize_modules
 from core.utils.util import check_vad_update, check_asr_update
 
@@ -72,6 +78,13 @@ class WebSocketServer:
         server_config = self.config["server"]
         host = server_config.get("ip", "0.0.0.0")
         port = int(server_config.get("port", 8000))
+        if isolation_required(self.config):
+            if not isolation_active(self.config):
+                raise IsolatedProfileError("isolated profile enabled but not applied")
+            if host not in {"127.0.0.1", "::1", "localhost"}:
+                raise IsolatedProfileError(
+                    "isolated profile refuses non-loopback bind; TLS termination is not implemented"
+                )
 
         async with websockets.serve(
             self._handle_connection,
@@ -164,6 +177,9 @@ class WebSocketServer:
         """
         try:
             async with self.config_lock:
+                if isolation_required(self.config):
+                    self.logger.bind(tag=TAG).info("隔离模式不从智控台刷新配置")
+                    return False
                 # 重新获取配置（使用异步版本）
                 new_config = await get_config_from_api_async(self.config)
                 if new_config is None:
@@ -209,6 +225,9 @@ class WebSocketServer:
 
     async def _handle_auth(self, websocket: websockets.ServerConnection):
         # 先认证，后建立连接
+        if isolation_required(self.config):
+            await self._handle_isolated_auth(websocket)
+            return
         if self.auth_enable:
             headers = dict(websocket.request.headers)
             device_id = headers.get("device-id", None)
@@ -229,3 +248,23 @@ class WebSocketServer:
                 )
                 if not auth_success:
                     raise AuthenticationError("Invalid token")
+
+    async def _handle_isolated_auth(self, websocket: websockets.ServerConnection):
+        """Allow only a current, unrevoked device presenting its own token."""
+        if not isolation_active(self.config):
+            raise AuthenticationError("isolated profile is not active")
+        headers = dict(websocket.request.headers)
+        device_id = headers.get("device-id")
+        client_id = headers.get("client-id")
+        registry = get_registry()
+        if not registry.is_allowed(device_id):
+            raise AuthenticationError("device rejected")
+        token = headers.get("authorization", "")
+        if token.startswith("Bearer "):
+            token = token[7:]
+        else:
+            raise AuthenticationError("Missing or invalid Authorization header")
+        if not client_id or not self.auth.verify_token(
+            token, client_id=client_id, username=device_id
+        ):
+            raise AuthenticationError("Invalid token")

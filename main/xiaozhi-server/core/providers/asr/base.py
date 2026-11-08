@@ -137,7 +137,12 @@ class ASRProviderBase(ABC):
                 if raw_text.get("emotion"):
                     logger.bind(tag=TAG).info(f"识别情绪: {raw_text['emotion']}")
                 if raw_text.get("content"):
-                    logger.bind(tag=TAG).info(f"识别文本: {raw_text['content']}")
+                    from core.isolation.profile import persistence_disabled
+
+                    if persistence_disabled():
+                        logger.bind(tag=TAG).info("isolated transcript suppressed")
+                    else:
+                        logger.bind(tag=TAG).info(f"识别文本: {raw_text['content']}")
                 if speaker_name:
                     logger.bind(tag=TAG).info(f"识别说话人: {speaker_name}")
 
@@ -147,7 +152,12 @@ class ASRProviderBase(ABC):
             else:
                 # 其他 ASR 返回的纯文本
                 if raw_text:
-                    logger.bind(tag=TAG).info(f"识别文本: {raw_text}")
+                    from core.isolation.profile import persistence_disabled
+
+                    if persistence_disabled():
+                        logger.bind(tag=TAG).info("isolated transcript suppressed")
+                    else:
+                        logger.bind(tag=TAG).info(f"识别文本: {raw_text}")
                 if speaker_name:
                     logger.bind(tag=TAG).info(f"识别说话人: {speaker_name}")
 
@@ -169,7 +179,12 @@ class ASRProviderBase(ABC):
                 # 使用自定义模块进行上报
                 await startToChat(conn, enhanced_text)
         except Exception as e:
-            logger.bind(tag=TAG).error(f"处理语音停止失败: {e}")
+            from core.isolation.profile import persistence_disabled
+
+            if persistence_disabled():
+                logger.bind(tag=TAG).error("处理语音停止失败")
+            else:
+                logger.bind(tag=TAG).error(f"处理语音停止失败: {e}")
             import traceback
 
             logger.bind(tag=TAG).debug(f"异常详情: {traceback.format_exc()}")
@@ -268,6 +283,15 @@ class ASRProviderBase(ABC):
     async def speech_to_text_wrapper(
         self, pcm_data: List[bytes], session_id: str
     ) -> Tuple[Optional[str], Optional[str]]:
+        from core.isolation.profile import persistence_disabled
+
+        if persistence_disabled():
+            try:
+                text, _ = await self.speech_to_text(pcm_data, session_id, None)
+                return text, None
+            except Exception:
+                logger.bind(tag=TAG).error("语音识别失败")
+                return None, None
         file_path = None
         temp_path = None
         try:
