@@ -112,13 +112,14 @@ def encode_ima_wav(samples: np.ndarray, sample_rate: int) -> bytes:
     per_block = 505
     blocks = []
     offset = 0
+    index = 0
     while offset < pcm.size:
         chunk = pcm[offset : offset + per_block]
         offset += per_block
         if chunk.size < per_block:
             chunk = np.pad(chunk, (0, per_block - chunk.size), mode="edge")
         predictor = int(chunk[0])
-        index = 0
+        carried = index
         nibbles = []
         for sample in chunk[1:]:
             step = _STEP[index]
@@ -139,7 +140,7 @@ def encode_ima_wav(samples: np.ndarray, sample_rate: int) -> bytes:
             nibbles.append(nibble)
         raw = bytearray(block_align)
         struct.pack_into("<h", raw, 0, int(chunk[0]))
-        raw[2] = 0
+        raw[2] = carried
         for i in range(0, len(nibbles), 2):
             raw[4 + i // 2] = nibbles[i] | (nibbles[i + 1] << 4)
         blocks.append(bytes(raw))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from core.isolation.hid_wav import decode_hid_wav, encode_ima_wav, pcm16_wav, re
 from core.isolation.profile import apply_isolated_profile, reset_runtime_for_tests
 
 ROOT = Path(__file__).resolve().parents[3]
+DEVICE_IMA_SHA = "0c6e2b60a4ce282936bd76a24cddc951a0d43ff8842cbbbc5ad208a185f2cede"
 DEVICE_ID = "aa:bb:cc:dd:ee:01"
 SECRET = "isolated-device-secret-marker-9f3c"
 
@@ -115,14 +117,13 @@ def test_hid_voice_rejects_missing_credential_and_accepts_pcm(tmp_path, monkeypa
     assert status == 415
 
 
-def test_ima_wav_roundtrip_keeps_the_documented_block_layout():
-    source = (np.sin(np.linspace(0, 40, 1200)) * 8000).astype(np.int16)
+def test_ima_bytes_match_the_device_encoder():
+    source = np.array([((i * 17) % 20001) - 10000 for i in range(1200)], dtype=np.int16)
     encoded = encode_ima_wav(source, 16000)
+    assert hashlib.sha256(encoded).hexdigest() == DEVICE_IMA_SHA
     decoded, rate = decode_hid_wav(encoded)
-    assert rate == 16000
-    assert decoded.size == source.size
-    assert encoded[8:12] == b"WAVE"
-    assert np.max(np.abs(decoded.astype(np.int32) - source.astype(np.int32))) < 2000
+    assert rate == 16000 and decoded.size == source.size
+    assert int(decoded[0]) == int(source[0])
 
 
 def test_real_local_models_answer_a_pcm_wav(tmp_path):
