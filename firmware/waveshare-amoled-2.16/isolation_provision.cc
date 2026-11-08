@@ -1,3 +1,4 @@
+#include "sdkconfig.h"
 #include "isolation_policy.h"
 
 #if defined(CONFIG_XIAOZHI_ISOLATED_PROFILE)
