@@ -47,14 +47,23 @@ class HidVoiceHandler:
         except HidWavError:
             return web.Response(status=415, text='{"message":"wav required"}', content_type="application/json")
         pcm = resample_int16(samples, rate, 16000)
-        asr, llm, tts = self._providers()
-        text, _path = await asr.speech_to_text([], "hid", artifacts=type("A", (), {"pcm_bytes": pcm.tobytes()})())
-        if not text:
-            return web.Response(status=422, text='{"message":"unrecognized"}', content_type="application/json")
-        reply = "".join(llm.response("hid", [{"role": "user", "content": text}])).strip()
-        if not reply:
-            return web.Response(status=422, text='{"message":"empty reply"}', content_type="application/json")
-        spoken = await tts.text_to_speak(reply, None)
+        try:
+            asr, llm, tts = self._providers()
+            text, _path = await asr.speech_to_text([], "hid", artifacts=type("A", (), {"pcm_bytes": pcm.tobytes()})())
+            if not text:
+                return web.Response(status=422, text='{"message":"unrecognized"}', content_type="application/json")
+            reply = "".join(llm.response("hid", [{"role": "user", "content": text}])).strip()
+            if not reply:
+                return web.Response(status=422, text='{"message":"empty reply"}', content_type="application/json")
+            spoken = await tts.text_to_speak(reply, None)
+        except Exception as exc:
+            name = getattr(exc, "name", None)
+            detail = type(exc).__name__ if not name else f"{type(exc).__name__}:{name}"
+            return web.Response(
+                status=500,
+                text='{"message":"inference failed","error":"%s"}' % detail,
+                content_type="application/json",
+            )
         try:
             spoken_pcm, spoken_rate = decode_hid_wav(spoken)
         except HidWavError:

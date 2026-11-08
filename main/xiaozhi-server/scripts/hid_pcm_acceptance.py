@@ -172,7 +172,9 @@ async def run(config: dict, proof_path: Path) -> dict:
     untrusted_rejected = False
     try:
         async with ClientSession(connector=TCPConnector(ssl=_client_ssl(ca_file))) as session:
-            status, _kind, _body = await _post(session, url, pcm16_wav(np.zeros(1600, dtype=np.int16), 16000), None)
+            status, _kind, denied = await _post(session, url, pcm16_wav(np.zeros(1600, dtype=np.int16), 16000), None)
+            if status != 401:
+                raise SystemExit(f"missing credential status={status} body={denied[:180]!r}")
             rows.append({"check": "missing_credential", "status": status})
             for sentence in SENTENCES:
                 spoken = await tts.text_to_speak(sentence, None)
@@ -180,7 +182,11 @@ async def run(config: dict, proof_path: Path) -> dict:
                 pcm = resample_int16(samples, rate, 16000)
                 started = time.perf_counter()
                 status, kind, body = await _post(session, url, pcm16_wav(pcm, 16000), DEVICE_SECRET)
-                reply, reply_rate = decode_hid_wav(body) if status == 200 else (np.zeros(0, dtype=np.int16), 0)
+                if status != 200 or kind != "audio/wav":
+                    raise SystemExit(f"pcm failed status={status} body={body[:180]!r}")
+                reply, reply_rate = decode_hid_wav(body)
+                if reply_rate != 16000 or reply.size <= 1000:
+                    raise SystemExit(f"pcm reply is not 16 kHz audio: rate={reply_rate} samples={reply.size}")
                 rows.append(
                     {
                         "check": "pcm",
@@ -190,12 +196,17 @@ async def run(config: dict, proof_path: Path) -> dict:
                         "seconds": round(time.perf_counter() - started, 3),
                         "reply_rate": int(reply_rate),
                         "reply_samples": int(reply.size),
+                        "reply_sha256_observed": __import__("hashlib").sha256(body).hexdigest(),
                     }
                 )
                 ima = encode_ima_wav(pcm, 16000)
                 started = time.perf_counter()
                 status, kind, body = await _post(session, url, ima, DEVICE_SECRET)
-                reply, reply_rate = decode_hid_wav(body) if status == 200 else (np.zeros(0, dtype=np.int16), 0)
+                if status != 200 or kind != "audio/wav":
+                    raise SystemExit(f"ima failed status={status} body={body[:180]!r}")
+                reply, reply_rate = decode_hid_wav(body)
+                if reply_rate != 16000 or reply.size <= 1000:
+                    raise SystemExit(f"ima reply is not 16 kHz audio: rate={reply_rate} samples={reply.size}")
                 rows.append(
                     {
                         "check": "ima",
@@ -206,6 +217,7 @@ async def run(config: dict, proof_path: Path) -> dict:
                         "reply_rate": int(reply_rate),
                         "reply_samples": int(reply.size),
                         "ima_sha256": __import__("hashlib").sha256(ima).hexdigest(),
+                        "reply_sha256_observed": __import__("hashlib").sha256(body).hexdigest(),
                     }
                 )
         try:
@@ -213,6 +225,8 @@ async def run(config: dict, proof_path: Path) -> dict:
                 await _post(session, url, pcm16_wav(np.zeros(1600, dtype=np.int16), 16000), DEVICE_SECRET)
         except Exception:
             untrusted_rejected = True
+        if not untrusted_rejected:
+            raise SystemExit("untrusted CA was accepted")
     finally:
         await runner.cleanup()
         server_pem.unlink(missing_ok=True)
@@ -225,6 +239,7 @@ async def run(config: dict, proof_path: Path) -> dict:
         "untrusted_ca_rejected": untrusted_rejected,
         "credential_recorded": False,
         "production_endpoint_set": False,
+        "reply_audio_hash_is_not_a_pass_criterion": True,
     }
     proof_path.write_text(yaml.safe_dump(proof, allow_unicode=True), encoding="utf-8")
     summary = {
