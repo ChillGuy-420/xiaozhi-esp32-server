@@ -6,6 +6,7 @@ from core.api.base_handler import BaseHandler
 from core.utils.util import get_vision_url, is_valid_image_file
 from core.utils.vllm import create_instance
 from config.config_loader import get_private_config_from_api
+from core.isolation.profile import isolation_required
 from core.utils.auth import AuthToken
 import base64
 from typing import Tuple, Optional
@@ -33,8 +34,9 @@ class VisionHandler(BaseHandler):
         auth_header = request.headers.get("Authorization", "")
         client_id = request.headers.get("Client-Id", "")
 
-        # 允许测试客户端跳过认证
-        if client_id == "web_test_client":
+        # 允许测试客户端跳过认证。隔离模式在 handle_post 入口直接拒绝，
+        # 不会走到这里。
+        if client_id == "web_test_client" and not isolation_required(self.config):
             device_id = request.headers.get("Device-Id", "test_device")
             return True, device_id
 
@@ -48,6 +50,15 @@ class VisionHandler(BaseHandler):
         """处理 MCP Vision POST 请求"""
         response = None  # 初始化response变量
         try:
+            if isolation_required(self.config):
+                response = web.Response(
+                    text=json.dumps(
+                        self._create_error_response("isolated profile disables vision")
+                    ),
+                    content_type="application/json",
+                    status=403,
+                )
+                return response
             # 验证token
             is_valid, token_device_id = self._verify_auth_token(request)
             if not is_valid:
@@ -161,6 +172,13 @@ class VisionHandler(BaseHandler):
     async def handle_get(self, request):
         """处理 MCP Vision GET 请求"""
         try:
+            if isolation_required(self.config):
+                response = web.Response(
+                    text="isolated profile disables vision",
+                    content_type="text/plain",
+                    status=403,
+                )
+                return response
             vision_explain = get_vision_url(self.config)
             if vision_explain and len(vision_explain) > 0 and "null" != vision_explain:
                 message = (

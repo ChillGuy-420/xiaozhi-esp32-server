@@ -10,6 +10,12 @@ from typing import Dict, List, Tuple
 from aiohttp import web
 
 from core.auth import AuthManager
+from core.isolation.profile import (
+    IsolatedProfileError,
+    get_registry,
+    isolation_active,
+    isolation_required,
+)
 from core.utils.util import get_local_ip, get_vision_url
 from core.api.base_handler import BaseHandler
 
@@ -140,6 +146,65 @@ class OTAHandler(BaseHandler):
         else:
             return f"ws://{local_ip}:{port}/xiaozhi/v1/"
 
+    def _isolated_enabled(self) -> bool:
+        return isolation_required(self.config)
+
+    async def _handle_isolated_post(self, request):
+        """Issue a device-bound token only after the allowlist credential matches."""
+        response = None
+        try:
+            if not isolation_active(self.config):
+                raise IsolatedProfileError("isolated profile enabled but not applied")
+            device_id = request.headers.get("device-id", "")
+            client_id = request.headers.get("client-id", "")
+            presented = request.headers.get("device-credential", "")
+            registry = get_registry()
+            if not registry.credential_matches(device_id, presented):
+                self.logger.bind(tag=TAG).info("isolated ota rejected")
+                response = web.Response(
+                    text='{"success":false,"message":"unauthorized"}',
+                    content_type="application/json",
+                    status=401,
+                )
+                return response
+            token = self.auth.generate_token(client_id, device_id)
+            port = int(self.config["server"].get("port", 8000))
+            scheme = "wss" if self.config["server"].get("isolated_tls") else "ws"
+            body = {
+                "server_time": {
+                    "timestamp": int(round(time.time() * 1000)),
+                    "timezone_offset": self.config["server"].get("timezone_offset", 8) * 60,
+                },
+                "firmware": {"version": "0.0.0", "url": ""},
+                "websocket": {
+                    "url": f"{scheme}://127.0.0.1:{port}/xiaozhi/v1/",
+                    "token": token,
+                },
+            }
+            self.logger.bind(tag=TAG).info("isolated ota accepted")
+            response = web.Response(
+                text=json.dumps(body, separators=(",", ":")),
+                content_type="application/json",
+            )
+        except IsolatedProfileError:
+            self.logger.bind(tag=TAG).error("isolated ota unavailable")
+            response = web.Response(
+                text='{"success":false,"message":"unavailable"}',
+                content_type="application/json",
+                status=503,
+            )
+        except Exception:
+            self.logger.bind(tag=TAG).error("isolated ota failed")
+            response = web.Response(
+                text='{"success":false,"message":"request error."}',
+                content_type="application/json",
+                status=400,
+            )
+        finally:
+            if response is not None:
+                self._add_cors_headers(response)
+            return response
+
     async def handle_post(self, request):
         """处理 OTA POST 请求
 
@@ -149,6 +214,8 @@ class OTAHandler(BaseHandler):
         - check data/bin for newer firmware for that model
         - if found a newer firmware, set firmware.url to the download endpoint
         """
+        if self._isolated_enabled():
+            return await self._handle_isolated_post(request)
         try:
             data = await request.text()
             self.logger.bind(tag=TAG).debug(f"OTA请求方法: {request.method}")

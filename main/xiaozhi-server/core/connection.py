@@ -37,6 +37,7 @@ from core.providers.tools.unified_tool_handler import UnifiedToolHandler
 from plugins_func.loadplugins import auto_import_modules
 from plugins_func.register import Action, ActionResponse, all_function_registry, module_func_map
 from core.auth import AuthenticationError
+from core.isolation.profile import isolation_active
 from config.config_loader import get_private_config_from_api
 from core.providers.tts.dto.dto import ContentType, TTSMessageDTO, SentenceType
 from config.logger import setup_logging, build_module_string, create_connection_logger
@@ -100,6 +101,8 @@ class ConnectionHandler:
         self.bind_prompt_interval = 60  # 绑定提示播放间隔(秒)
 
         self.read_config_from_api = self.config.get("read_config_from_api", False)
+        if isolation_active(self.config):
+            self.read_config_from_api = False
 
         self.websocket: websockets.ServerConnection | None = None
         self.headers = None
@@ -129,6 +132,12 @@ class ConnectionHandler:
         # 未来可以通过修改此处，调节asr的上报和tts的上报，目前默认都开启
         self.report_asr_enable = self.read_config_from_api
         self.report_tts_enable = self.read_config_from_api
+        if isolation_active(self.config):
+            self.chat_history_conf = 0
+            self.report_asr_enable = False
+            self.report_tts_enable = False
+            self.intent_type = "nointent"
+            self.load_function_plugin = False
 
         # 依赖的组件
         self.vad = None
@@ -137,8 +146,8 @@ class ConnectionHandler:
         self._asr = _asr
         self._vad = _vad
         self.llm = _llm
-        self.memory = _memory
-        self.intent = _intent
+        self.memory = None if isolation_active(self.config) else _memory
+        self.intent = None if isolation_active(self.config) else _intent
 
         # 为每个连接单独管理声纹识别
         self.voiceprint_provider = None
@@ -214,9 +223,12 @@ class ConnectionHandler:
                 self.client_ip = real_ip.split(",")[0].strip()
             else:
                 self.client_ip = ws.remote_address[0]
-            self.logger.bind(tag=TAG).info(
-                f"{self.client_ip} conn - Headers: {self.headers}"
-            )
+            if isolation_active(self.config):
+                self.logger.bind(tag=TAG).info("isolated connection accepted")
+            else:
+                self.logger.bind(tag=TAG).info(
+                    f"{self.client_ip} conn - Headers: {self.headers}"
+                )
 
             self.device_id = self.headers.get("device-id", None)
 
@@ -625,9 +637,12 @@ class ConnectionHandler:
                 # 使用快速提示词进行初始化
                 prompt = self.prompt_manager.get_quick_prompt(user_prompt)
                 self.change_system_prompt(prompt)
-                self.logger.bind(tag=TAG).info(
-                    f"快速初始化组件: prompt成功 {prompt[:50]}..."
-                )
+                if isolation_active(self.config):
+                    self.logger.bind(tag=TAG).info("isolated prompt initialized")
+                else:
+                    self.logger.bind(tag=TAG).info(
+                        f"快速初始化组件: prompt成功 {prompt[:50]}..."
+                    )
 
             """初始化本地组件"""
             if self.vad is None:
@@ -999,6 +1014,11 @@ class ConnectionHandler:
                 self.logger.bind(tag=TAG).info("使用主LLM作为意图识别模型")
 
     def _initialize_intent(self):
+        if isolation_active(self.config):
+            self.intent_type = "nointent"
+            self.load_function_plugin = False
+            self.func_handler = None
+            return
         if self.intent is None:
             return
         self.intent_type = self.config["Intent"][
@@ -1056,8 +1076,10 @@ class ConnectionHandler:
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
 
-        if query is not None:
+        if query is not None and not isolation_active(self.config):
             self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
+        elif query is not None:
+            self.logger.bind(tag=TAG).info("isolated user turn accepted")
 
         # 为最顶层时新建会话ID和发送FIRST请求
         if depth == 0:
@@ -1094,6 +1116,9 @@ class ConnectionHandler:
 
         # Define intent functions
         functions = None
+        if isolation_active(self.config):
+            self.intent_type = "nointent"
+            self.func_handler = None
         # 达到最大深度时，禁用工具调用，强制 LLM 直接回答
         if (
                 self.intent_type == "function_call"
@@ -1143,7 +1168,10 @@ class ConnectionHandler:
                     ),
                 )
         except Exception as e:
-            self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
+            if isolation_active(self.config):
+                self.logger.bind(tag=TAG).error("LLM 处理出错")
+            else:
+                self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
             return None
 
         # 处理流式响应

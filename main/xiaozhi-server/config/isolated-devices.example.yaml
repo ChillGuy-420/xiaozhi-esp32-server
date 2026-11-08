@@ -1,0 +1,7 @@
+# 示例。不要把这个文件当成运行中的允许清单。
+# 运行时路径由环境变量 XIAOZHI_ISOLATED_DEVICES_FILE 指定。
+# credential_env 只是环境变量名。真正的设备凭据放在该环境变量里，不要写进此文件。
+devices:
+  - device_id: "placeholder-device-id"
+    credential_env: "XIAOZHI_DEVICE_CREDENTIAL"
+    revoked: false

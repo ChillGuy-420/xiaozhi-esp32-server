@@ -48,19 +48,22 @@ async def main():
     check_ffmpeg_installed()
     config = await load_config()
 
-    # auth_key优先级：配置文件server.auth_key > manager-api.secret > 自动生成
-    # auth_key用于jwt认证，比如视觉分析接口的jwt认证、ota接口的token生成与websocket认证
-    # 获取配置文件中的auth_key
-    auth_key = config["server"].get("auth_key", "")
-    
-    # 验证auth_key，无效则尝试使用manager-api.secret
-    if not auth_key or len(auth_key) == 0 or "你" in auth_key:
-        auth_key = config.get("manager-api", {}).get("secret", "")
-        # 验证secret，无效则生成随机密钥
+    # 隔离模式的密钥只来自 XIAOZHI_AUTH_KEY，不允许回退到配置文件、
+    # manager-api.secret 或随机值。
+    if not config.get("_isolated_profile_active"):
+        # auth_key优先级：配置文件server.auth_key > manager-api.secret > 自动生成
+        # auth_key用于jwt认证，比如视觉分析接口的jwt认证、ota接口的token生成与websocket认证
+        # 获取配置文件中的auth_key
+        auth_key = config["server"].get("auth_key", "")
+
+        # 验证auth_key，无效则尝试使用manager-api.secret
         if not auth_key or len(auth_key) == 0 or "你" in auth_key:
-            auth_key = str(uuid.uuid4().hex)
-    
-    config["server"]["auth_key"] = auth_key
+            auth_key = config.get("manager-api", {}).get("secret", "")
+            # 验证secret，无效则生成随机密钥
+            if not auth_key or len(auth_key) == 0 or "你" in auth_key:
+                auth_key = str(uuid.uuid4().hex)
+
+        config["server"]["auth_key"] = auth_key
 
     # 添加 stdin 监控任务
     stdin_task = asyncio.create_task(monitor_stdin())
@@ -80,19 +83,29 @@ async def main():
     ota_task = asyncio.create_task(ota_server.start())
 
     read_config_from_api = config.get("read_config_from_api", False)
+    isolated = bool(config.get("_isolated_profile_active"))
     port = int(config["server"].get("http_port", 8003))
-    if not read_config_from_api:
+    if isolated:
+        logger.bind(tag=TAG).info(
+            "隔离模式只监听 loopback。TLS 终止尚未实现，不要把这个地址公布到局域网或公网。"
+        )
+        logger.bind(tag=TAG).info(
+            "OTA接口是\t\thttp://127.0.0.1:{}/xiaozhi/ota/",
+            port,
+        )
+    elif not read_config_from_api:
         logger.bind(tag=TAG).info(
             "OTA接口是\t\thttp://{}:{}/xiaozhi/ota/",
             get_local_ip(),
             port,
         )
-    logger.bind(tag=TAG).info(
-        "视觉分析接口是\thttp://{}:{}/mcp/vision/explain",
-        get_local_ip(),
-        port,
-    )
-    mcp_endpoint = config.get("mcp_endpoint", None)
+    if not isolated:
+        logger.bind(tag=TAG).info(
+            "视觉分析接口是\thttp://{}:{}/mcp/vision/explain",
+            get_local_ip(),
+            port,
+        )
+    mcp_endpoint = None if isolated else config.get("mcp_endpoint", None)
     if mcp_endpoint is not None and "你" not in mcp_endpoint:
         # 校验MCP接入点格式
         if validate_mcp_endpoint(mcp_endpoint):
@@ -110,11 +123,23 @@ async def main():
     if isinstance(server_config, dict):
         websocket_port = int(server_config.get("port", 8000))
 
-    logger.bind(tag=TAG).info(
-        "Websocket地址是\tws://{}:{}/xiaozhi/v1/",
-        get_local_ip(),
-        websocket_port,
-    )
+    if isolated:
+        scheme = "wss" if config.get("server", {}).get("isolated_tls") else "ws"
+        logger.bind(tag=TAG).info(
+            "Websocket地址是\t{}://127.0.0.1:{}/xiaozhi/v1/",
+            scheme,
+            websocket_port,
+        )
+        if scheme == "wss":
+            logger.bind(tag=TAG).info(
+                "这是回环 TLS。ESP32 证书发放尚未实作。"
+            )
+    else:
+        logger.bind(tag=TAG).info(
+            "Websocket地址是\tws://{}:{}/xiaozhi/v1/",
+            get_local_ip(),
+            websocket_port,
+        )
 
     logger.bind(tag=TAG).info(
         "=======上面的地址是websocket协议地址，请勿用浏览器访问======="

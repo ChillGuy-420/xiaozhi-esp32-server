@@ -1,0 +1,19 @@
+# CPU-only dependencies for the isolated acceptance script.
+# Install these in a fresh virtual environment. Do not reuse or upgrade an
+# existing torch/whisper environment for this package.
+numpy==1.26.4
+aiohttp==3.14.5
+websockets==17.4
+PyYAML==6.0.1
+loguru==0.7.3
+pydub==0.25.1
+requests==2.34.2
+httpx==0.28.1
+PyJWT==2.15.1
+cryptography==41.0.7
+portalocker==2.10.1
+vosk==0.3.45
+llama-cpp-python==0.3.36
+sherpa-onnx==2.0.1
+opencc-python-reimplemented==0.1.7
+opuslib_next==1.3.1

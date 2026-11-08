@@ -1,8 +1,10 @@
 import asyncio
 from aiohttp import web
 from config.logger import setup_logging
+from core.api.hid_voice_handler import HidVoiceHandler
 from core.api.ota_handler import OTAHandler
 from core.api.vision_handler import VisionHandler
+from core.isolation.profile import IsolatedProfileError, isolation_active, isolation_required
 
 TAG = __name__
 
@@ -13,6 +15,7 @@ class SimpleHttpServer:
         self.logger = setup_logging()
         self.ota_handler = OTAHandler(config)
         self.vision_handler = VisionHandler(config)
+        self.hid_voice_handler = HidVoiceHandler(config)
 
     def _get_websocket_url(self, local_ip: str, port: int) -> str:
         """获取websocket地址
@@ -38,11 +41,21 @@ class SimpleHttpServer:
             read_config_from_api = self.config.get("read_config_from_api", False)
             host = server_config.get("ip", "0.0.0.0")
             port = int(server_config.get("http_port", 8003))
+            isolated = isolation_required(self.config)
+            if isolated:
+                if not isolation_active(self.config) or host not in {
+                    "127.0.0.1",
+                    "::1",
+                    "localhost",
+                }:
+                    raise IsolatedProfileError(
+                        "isolated profile refuses non-loopback bind; TLS termination is not implemented"
+                    )
 
             if port:
                 app = web.Application()
 
-                if not read_config_from_api:
+                if not read_config_from_api and not isolated:
                     # 如果没有开启智控台，只是单模块运行，就需要再添加简单OTA接口，用于下发websocket接口
                     app.add_routes(
                         [
@@ -62,8 +75,18 @@ class SimpleHttpServer:
                             ),
                         ]
                     )
+                if isolated:
+                    app.add_routes(
+                        [
+                            web.post("/xiaozhi/ota/", self.ota_handler.handle_post),
+                            web.options("/xiaozhi/ota/", self.ota_handler.handle_options),
+                            web.post("/xiaozhi/isolated/hid-voice", self.hid_voice_handler.handle_post),
+                            web.options("/xiaozhi/isolated/hid-voice", self.hid_voice_handler.handle_options),
+                        ]
+                    )
                 # 添加路由
-                app.add_routes(
+                if not isolated:
+                    app.add_routes(
                     [
                         web.get("/mcp/vision/explain", self.vision_handler.handle_get),
                         web.post(

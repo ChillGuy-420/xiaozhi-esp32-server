@@ -14,6 +14,10 @@ class ContextDataProvider:
 
     def fetch_all(self, device_id: str) -> str:
         """获取所有配置的上下文数据"""
+        from core.isolation.profile import isolation_active
+
+        if isolation_active(self.config):
+            return ""
         context_providers = self.config.get("context_providers", [])
         if not context_providers:
             return ""
