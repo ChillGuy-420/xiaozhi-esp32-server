@@ -54,6 +54,15 @@ async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
         conn.logger.bind(tag=TAG).debug(f"客户端音频格式: {format}")
         conn.audio_format = format
         conn.welcome_msg["audio_params"] = audio_params
+        if isolation_active(conn.config):
+            rate = audio_params.get("sample_rate")
+            if rate in (8000, 12000, 16000, 24000, 48000):
+                conn.sample_rate = rate
+                encoder = getattr(getattr(conn, "tts", None), "opus_encoder", None)
+                if encoder is not None:
+                    from core.utils.opus_encoder_utils import OpusEncoderUtils
+
+                    conn.tts.opus_encoder = OpusEncoderUtils(rate, 1, 60)
     features = msg_json.get("features")
     if isolation_active(conn.config):
         features = None
