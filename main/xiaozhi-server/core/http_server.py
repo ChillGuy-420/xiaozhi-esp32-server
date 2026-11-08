@@ -1,6 +1,7 @@
 import asyncio
 from aiohttp import web
 from config.logger import setup_logging
+from core.api.hid_voice_handler import HidVoiceHandler
 from core.api.ota_handler import OTAHandler
 from core.api.vision_handler import VisionHandler
 from core.isolation.profile import IsolatedProfileError, isolation_active, isolation_required
@@ -14,6 +15,7 @@ class SimpleHttpServer:
         self.logger = setup_logging()
         self.ota_handler = OTAHandler(config)
         self.vision_handler = VisionHandler(config)
+        self.hid_voice_handler = HidVoiceHandler(config)
 
     def _get_websocket_url(self, local_ip: str, port: int) -> str:
         """获取websocket地址
@@ -78,6 +80,8 @@ class SimpleHttpServer:
                         [
                             web.post("/xiaozhi/ota/", self.ota_handler.handle_post),
                             web.options("/xiaozhi/ota/", self.ota_handler.handle_options),
+                            web.post("/xiaozhi/isolated/hid-voice", self.hid_voice_handler.handle_post),
+                            web.options("/xiaozhi/isolated/hid-voice", self.hid_voice_handler.handle_options),
                         ]
                     )
                 # 添加路由
