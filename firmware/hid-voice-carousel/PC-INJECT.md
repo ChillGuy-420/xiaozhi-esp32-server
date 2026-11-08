@@ -1,42 +1,21 @@
-# 語音輪播與桌面圖：電腦上才能完成的注入
+# 單一路徑：沿用既有 HID 韌體
 
-雲端沒有 `wallpaper.rgb565`，也沒有 `app_face.c` / `app_face.h`。桌面照片沒有被替換，也沒有在雲端建置進韌體。下面是在原本那份 `~/esp32s3-hid` 上套用的最小步驟。不要跑 `tools/make_wallpaper.py`：來源 jpg 不在雲端，那個腳本在缺檔時會寫出一張漸層替代圖。
+小智整包映像和 `~/esp32s3-hid` 不是同一個程式。小智映像沒有桌面／語音滑動切換，也沒有 `wallpaper.rgb565`。燒進小智會拿掉現在的桌面。裝置端只改既有這份 HID 韌體；後端仍是已做好的隔離伺服器（裝置憑據、拒絕 `tenclass.net`、空權杖與缺少私人 CA 都不連線）。
 
-## 先核對既有桌面圖，不要重做
+`voice-carousel.patch` 只改 `main/app_ui.c` 與 `main/CMakeLists.txt`，並新增輪播檔。`app_desk.c` 的 `load_wallpaper()` 與 `app_face.c` / `app_face.h` 都不改。桌面繼續嵌 `assets/wallpaper.rgb565`。五張圖只出現在語音畫面，表情物件隱藏，30fps 表情計時停掉，避免蓋住圖或佔著繪圖。換圖只換指標，不重解碼。
 
-在韌體根目錄：
+在 HID 根目錄、確認工作樹乾淨後：
 
 ```bash
 test "$(wc -c < main/assets/wallpaper.rgb565)" -eq 460800
 sha256sum main/assets/wallpaper.rgb565
+mkdir -p main/assets/voice
+# 放入五個 460800 位元組的 voice-mode.rgb565 … voice-mode-5.rgb565
+patch -p1 < voice-carousel.patch
 ```
 
-預期 SHA256 是 sanitize 清單裡的原檔：
+壁紙 SHA256 必須是 `eca6cf65d340f5df09dc0891ba40477a4cc9f1175a5114731523a2e14314fe09`。不要跑 `tools/make_wallpaper.py`。
 
-`eca6cf65d340f5df09dc0891ba40477a4cc9f1175a5114731523a2e14314fe09`
+伺服器端的憑據與 CA 檢查已經在隔離後端。HID 裡真正開連線的是 `main/app_net.c`，這次來源沒有它，所以這份 patch 還沒有把 `Device-Credential` 送進裝置。那是同一條路徑的下一小段，不是另一份韌體。
 
-不一致就停。不要用別的圖補上。
-
-## 語音五張，獨立檔名
-
-五張 RGB565 是 480x480、小端、各 460800 位元組，等比例留黑邊，不裁切。檔名是 `voice-mode.rgb565` 到 `voice-mode-5.rgb565`，不是 `wallpaper.rgb565`。把這五個檔放到 `main/assets/voice/`。CMake 在既有那一行之外追加，不要拿掉桌面圖：
-
-```
-EMBED_FILES "assets/wallpaper.rgb565"
-            "assets/voice/voice-mode.rgb565"
-            "assets/voice/voice-mode-2.rgb565"
-            "assets/voice/voice-mode-3.rgb565"
-            "assets/voice/voice-mode-4.rgb565"
-            "assets/voice/voice-mode-5.rgb565"
-```
-
-`voice_carousel.c` 只在語音畫面顯示時每 8 秒換一張，桌面模式不推進、不畫這五張。通知與天氣網址沒有接進來。
-
-## 還不能改語音畫面的原因
-
-語音畫面唯一的建立點是 `app_ui.c` 的 `s_face = face_create(scr)`。`face_create`、`face_run`、`FACE_W`、`FACE_H` 都在尚未提供的：
-
-- `main/app_face.h`
-- `main/app_face.c`
-
-沒有這兩個檔，就不能把輪播接到現有表情物件，也不能聲稱桌面行為已經在裝置上保留。桌面載圖仍只在 `app_desk.c` 的 `load_wallpaper()`，符號是 `_binary_wallpaper_rgb565_start`。
+本機 `build/bootloader/bootloader.bin` 是 22496 位元組，SHA256 `970321be98c50a8f8398ec181dc769dce97e86ce29c98308cd7f84c0c3ac39ac`。雲端小智建置的 bootloader 是 16528 位元組、另一個雜湊。兩者都還沒有和板上的啟動程式比對，不能當成相容。

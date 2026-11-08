@@ -1,0 +1,232 @@
+--- a/main/app_ui.c
++++ b/main/app_ui.c
+@@ -18,6 +18,7 @@
+ #include "app_audio.h"
+ #include "app_desk.h"
+ #include "app_face.h"
++#include "voice_frames.h"
+ #include "app_tts.h"
+ #include "app_ui.h"
+ #include "screen_power.h"
+@@ -197,11 +198,13 @@
+     if (on) {
+         lv_obj_invalidate(lv_screen_active());
+         lv_obj_invalidate(lv_layer_top());
+-        face_run(!s_desk_shown);
++        face_run(false);
++        voice_frames_set_shown(!s_desk_shown);
+         esp_lcd_panel_disp_on_off(s_panel, true);
+         bsp_display_brightness_set(s_scr.bright);
+     } else {
+         face_run(false);
++        voice_frames_set_shown(false);
+         bsp_display_brightness_set(0);
+         esp_lcd_panel_disp_on_off(s_panel, false);
+     }
+@@ -397,7 +400,8 @@
+  * The face timer only runs while the voice screen is shown. */
+ static void show_screen(bool desk)
+ {
+-    face_run(!desk && !s_scr.off);
++    face_run(false);
++    voice_frames_set_shown(!desk && !s_scr.off);
+     if (desk == s_desk_shown) {
+         return;
+     }
+@@ -613,7 +617,9 @@
+     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+     lv_obj_set_scrollable(scr, false);
+ 
++    voice_frames_attach(scr);
+     s_face = face_create(scr);
++    lv_obj_add_flag(s_face, LV_OBJ_FLAG_HIDDEN);
+     create_state_row(scr);
+ 
+     s_wifi_label = lv_label_create(scr);
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -7,6 +7,8 @@
+                             "app_wifi.c"
+                             "app_ui.c"
+                             "app_face.c"
++                            "voice_carousel.c"
++                            "voice_frames.c"
+                             "screen_power.c"
+                             "power_policy.c"
+                             "app_audio.c"
+@@ -25,6 +27,11 @@
+                        LDFRAGMENTS "linker.lf"
+                        # Desk wallpaper: tools/make_wallpaper.py (480x480 RGB565, see README).
+                        EMBED_FILES "assets/wallpaper.rgb565"
++                                   "assets/voice/voice-mode.rgb565"
++                                   "assets/voice/voice-mode-2.rgb565"
++                                   "assets/voice/voice-mode-3.rgb565"
++                                   "assets/voice/voice-mode-4.rgb565"
++                                   "assets/voice/voice-mode-5.rgb565"
+                        PRIV_REQUIRES bt nvs_flash esp_driver_usb_serial_jtag
+                                      esp_wifi esp_netif esp_event esp_timer
+                                      esp_http_client mbedtls json
+--- /dev/null
++++ b/main/voice_carousel.c
+@@ -0,0 +1,39 @@
++#include "voice_carousel.h"
++
++void voice_carousel_init(voice_carousel_t *carousel) {
++    carousel->index = 0;
++    carousel->shown_since_ms = 0;
++    carousel->decoded_once = 0;
++    carousel->dwell_pending = 1;
++}
++
++void voice_carousel_mark_decoded(voice_carousel_t *carousel) {
++    carousel->decoded_once = 1;
++}
++
++int voice_carousel_frame(const voice_carousel_t *carousel, ui_mode_t mode, int voice_screen_visible) {
++    if (!carousel->decoded_once || mode != UI_MODE_VOICE || !voice_screen_visible) {
++        return -1;
++    }
++    if (carousel->index < 0 || carousel->index >= VOICE_FRAME_COUNT) {
++        return -1;
++    }
++    return carousel->index;
++}
++
++int voice_carousel_tick(voice_carousel_t *carousel, ui_mode_t mode, int voice_screen_visible, uint32_t now_ms) {
++    if (voice_carousel_frame(carousel, mode, voice_screen_visible) < 0) {
++        carousel->dwell_pending = 1;
++        return -1;
++    }
++    if (carousel->dwell_pending) {
++        carousel->dwell_pending = 0;
++        carousel->shown_since_ms = now_ms;
++        return carousel->index;
++    }
++    if ((uint32_t)(now_ms - carousel->shown_since_ms) >= VOICE_CAROUSEL_MS) {
++        carousel->index = (carousel->index + 1) % VOICE_FRAME_COUNT;
++        carousel->shown_since_ms = now_ms;
++    }
++    return carousel->index;
++}
+--- /dev/null
++++ b/main/voice_carousel.h
+@@ -0,0 +1,30 @@
++#ifndef VOICE_CAROUSEL_H
++#define VOICE_CAROUSEL_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define VOICE_FRAME_COUNT 5
++#define VOICE_FRAME_W 480
++#define VOICE_FRAME_H 480
++#define VOICE_FRAME_BYTES (VOICE_FRAME_W * VOICE_FRAME_H * 2)
++#define VOICE_CAROUSEL_MS 8000u
++
++typedef enum {
++    UI_MODE_VOICE = 0,
++    UI_MODE_DESK = 1,
++} ui_mode_t;
++
++typedef struct {
++    int index;
++    uint32_t shown_since_ms;
++    int decoded_once;
++    int dwell_pending;
++} voice_carousel_t;
++
++void voice_carousel_init(voice_carousel_t *carousel);
++void voice_carousel_mark_decoded(voice_carousel_t *carousel);
++int voice_carousel_frame(const voice_carousel_t *carousel, ui_mode_t mode, int voice_screen_visible);
++int voice_carousel_tick(voice_carousel_t *carousel, ui_mode_t mode, int voice_screen_visible, uint32_t now_ms);
++
++#endif
+--- /dev/null
++++ b/main/voice_frames.c
+@@ -0,0 +1,75 @@
++#include "voice_frames.h"
++
++#include "voice_carousel.h"
++
++#include "lvgl.h"
++
++extern const uint8_t voice_mode_rgb565_start[] asm("_binary_voice_mode_rgb565_start");
++extern const uint8_t voice_mode_rgb565_end[] asm("_binary_voice_mode_rgb565_end");
++extern const uint8_t voice_mode_2_rgb565_start[] asm("_binary_voice_mode_2_rgb565_start");
++extern const uint8_t voice_mode_2_rgb565_end[] asm("_binary_voice_mode_2_rgb565_end");
++extern const uint8_t voice_mode_3_rgb565_start[] asm("_binary_voice_mode_3_rgb565_start");
++extern const uint8_t voice_mode_3_rgb565_end[] asm("_binary_voice_mode_3_rgb565_end");
++extern const uint8_t voice_mode_4_rgb565_start[] asm("_binary_voice_mode_4_rgb565_start");
++extern const uint8_t voice_mode_4_rgb565_end[] asm("_binary_voice_mode_4_rgb565_end");
++extern const uint8_t voice_mode_5_rgb565_start[] asm("_binary_voice_mode_5_rgb565_start");
++extern const uint8_t voice_mode_5_rgb565_end[] asm("_binary_voice_mode_5_rgb565_end");
++
++static const uint8_t *const s_data[VOICE_FRAME_COUNT] = {
++    voice_mode_rgb565_start,
++    voice_mode_2_rgb565_start,
++    voice_mode_3_rgb565_start,
++    voice_mode_4_rgb565_start,
++    voice_mode_5_rgb565_start,
++};
++static const uint8_t *const s_end[VOICE_FRAME_COUNT] = {
++    voice_mode_rgb565_end,
++    voice_mode_2_rgb565_end,
++    voice_mode_3_rgb565_end,
++    voice_mode_4_rgb565_end,
++    voice_mode_5_rgb565_end,
++};
++
++static lv_draw_buf_t s_buf[VOICE_FRAME_COUNT];
++static lv_obj_t *s_img;
++static voice_carousel_t s_carousel;
++static int s_shown = -1;
++static bool s_visible;
++
++static void tick_cb(lv_timer_t *timer) {
++    (void)timer;
++    int frame = voice_carousel_tick(&s_carousel, s_visible ? UI_MODE_VOICE : UI_MODE_DESK, s_visible,
++                                    lv_tick_get());
++    if (frame < 0 || frame == s_shown || s_img == NULL) {
++        return;
++    }
++    s_shown = frame;
++    lv_image_set_src(s_img, &s_buf[frame]);
++}
++
++void voice_frames_attach(lv_obj_t *voice_screen) {
++    for (int i = 0; i < VOICE_FRAME_COUNT; ++i) {
++        size_t len = (size_t)(s_end[i] - s_data[i]);
++        if (len != VOICE_FRAME_BYTES) {
++            return;
++        }
++        if (lv_draw_buf_init(&s_buf[i], VOICE_FRAME_W, VOICE_FRAME_H, LV_COLOR_FORMAT_RGB565,
++                             VOICE_FRAME_W * 2, (void *)s_data[i], len) != LV_RESULT_OK) {
++            return;
++        }
++    }
++    voice_carousel_init(&s_carousel);
++    voice_carousel_mark_decoded(&s_carousel);
++    s_img = lv_image_create(voice_screen);
++    lv_obj_set_clickable(s_img, false);
++    lv_obj_set_pos(s_img, 0, 0);
++    lv_image_set_src(s_img, &s_buf[0]);
++    lv_obj_move_background(s_img);
++    s_shown = 0;
++    s_visible = true;
++    lv_timer_create(tick_cb, 1000, NULL);
++}
++
++void voice_frames_set_shown(bool voice_screen_visible) {
++    s_visible = voice_screen_visible;
++}
+--- /dev/null
++++ b/main/voice_frames.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++#include "lvgl.h"
++#include <stdbool.h>
++
++/* Full-screen voice pictures. Desk wallpaper is not referenced. */
++void voice_frames_attach(lv_obj_t *voice_screen);
++void voice_frames_set_shown(bool voice_screen_visible);
