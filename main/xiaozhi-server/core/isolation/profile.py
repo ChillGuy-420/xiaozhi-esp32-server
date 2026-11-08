@@ -3,9 +3,12 @@
 Enabled only by XIAOZHI_ISOLATED_PROFILE=1 or server.isolated_profile.enabled.
 Normal upstream mode is unchanged when this is off.
 
-This module does not terminate TLS. Non-loopback binds are refused.
+Non-loopback binds are refused. Optional loopback TLS uses local cert
+files only; ESP32 certificate provisioning is not implemented.
 Device secrets are read from environment variables named by the devices
 file. The file must not contain secret values.
+Local STT/LLM/TTS stay disabled until all three filesystem paths are set.
+There is no fallback to Edge or any other external provider.
 """
 
 from __future__ import annotations
@@ -24,6 +27,11 @@ _ENV_FLAG = "XIAOZHI_ISOLATED_PROFILE"
 _ENV_AUTH = "XIAOZHI_AUTH_KEY"
 _ENV_DEVICES = "XIAOZHI_ISOLATED_DEVICES_FILE"
 _ENV_TTL = "XIAOZHI_TOKEN_TTL_SECONDS"
+_ENV_ASR = "XIAOZHI_LOCAL_ASR_MODEL"
+_ENV_LLM = "XIAOZHI_LOCAL_LLM_GGUF"
+_ENV_TTS = "XIAOZHI_LOCAL_TTS_DIR"
+_ENV_TLS_CERT = "XIAOZHI_ISOLATED_TLS_CERT"
+_ENV_TLS_KEY = "XIAOZHI_ISOLATED_TLS_KEY"
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 _FORBIDDEN_DEVICE_KEYS = {
@@ -216,8 +224,14 @@ def apply_isolated_profile(config: dict) -> dict:
     }
     config["Memory"] = {"nomem": {"type": "nomem"}}
     config["Intent"] = {"nointent": {"type": "nointent", "functions": []}}
+    config["prompt"] = (
+        "你是一個只在本機運作的語音助手。用一句繁體中文回答。"
+        "不要使用工具，不要連網。"
+    )
     config["delete_audio"] = True
     config["chat_history_conf"] = 0
+    local_inference = _configure_local_models(config)
+    tls_paths = _configure_loopback_tls(server)
 
     auth = server.setdefault("auth", {})
     auth["enabled"] = True
@@ -229,7 +243,11 @@ def apply_isolated_profile(config: dict) -> dict:
     server["isolated_profile"] = {
         "enabled": True,
         "bind": host,
-        "tls_implemented": False,
+        "local_inference": local_inference,
+        "external_providers": False,
+        "loopback_tls": bool(tls_paths),
+        "esp32_tls_provisioning": False,
+        "tls_implemented": bool(tls_paths),
     }
     config["_isolated_profile_active"] = True
 
@@ -246,6 +264,92 @@ def _loguru_patcher(record: dict) -> None:
     from core.isolation.redaction import patcher
 
     patcher(record)
+
+
+def _configure_local_models(config: dict) -> bool:
+    asr = os.environ.get(_ENV_ASR, "").strip()
+    llm = os.environ.get(_ENV_LLM, "").strip()
+    tts = os.environ.get(_ENV_TTS, "").strip()
+    if not any((asr, llm, tts)):
+        return False
+    if not all((asr, llm, tts)):
+        raise IsolatedProfileError(
+            "local STT, LLM, and TTS must be configured together"
+        )
+    asr_path = _local_dir(asr, "ASR model")
+    llm_path = _local_file(llm, "LLM model")
+    tts_path = _local_dir(tts, "TTS model")
+    for name in ("model.onnx", "tokens.txt", "lexicon.txt"):
+        if not (tts_path / name).is_file():
+            raise IsolatedProfileError("TTS model directory is incomplete")
+    config["selected_module"]["ASR"] = "IsolatedLocalASR"
+    config["selected_module"]["LLM"] = "IsolatedLocalLLM"
+    config["selected_module"]["VLLM"] = "IsolatedLocalLLM"
+    config["selected_module"]["TTS"] = "IsolatedLocalTTS"
+    config["ASR"] = {
+        "IsolatedLocalASR": {
+            "type": "isolated_local",
+            "model_path": str(asr_path),
+            "output_dir": "tmp/isolated-profile",
+        }
+    }
+    config["LLM"] = {
+        "IsolatedLocalLLM": {
+            "type": "isolated_local",
+            "model_path": str(llm_path),
+            "max_tokens": 48,
+        }
+    }
+    config["VLLM"] = {"IsolatedLocalLLM": {"type": "isolated_local"}}
+    config["TTS"] = {
+        "IsolatedLocalTTS": {
+            "type": "isolated_local",
+            "model_dir": str(tts_path),
+            "output_dir": "tmp/isolated-profile",
+            "tts_timeout": 15,
+        }
+    }
+    return True
+
+
+def _configure_loopback_tls(server: dict) -> bool:
+    cert = os.environ.get(_ENV_TLS_CERT, "").strip()
+    key = os.environ.get(_ENV_TLS_KEY, "").strip()
+    if not cert and not key:
+        server.pop("isolated_tls", None)
+        return False
+    if not cert or not key:
+        raise IsolatedProfileError("loopback TLS cert and key must both be set")
+    server["isolated_tls"] = {
+        "cert": str(_local_file(cert, "TLS cert")),
+        "key": str(_local_file(key, "TLS key")),
+    }
+    return True
+
+
+def _local_dir(value: str, label: str):
+    path = _local_path(value, label)
+    if not path.is_dir():
+        raise IsolatedProfileError(f"{label} must be a local directory")
+    return path
+
+
+def _local_file(value: str, label: str):
+    path = _local_path(value, label)
+    if not path.is_file():
+        raise IsolatedProfileError(f"{label} must be a local file")
+    return path
+
+
+def _local_path(value: str, label: str):
+    from pathlib import Path
+
+    if "://" in value or value.lower().startswith(("http", "ws")):
+        raise IsolatedProfileError(f"{label} must be a local filesystem path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise IsolatedProfileError(f"{label} must be an absolute local path")
+    return path.resolve()
 
 
 def _token_ttl() -> int:

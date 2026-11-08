@@ -79,6 +79,11 @@ def _clean_env(monkeypatch):
         "XIAOZHI_ISOLATED_DEVICES_FILE",
         "XIAOZHI_TOKEN_TTL_SECONDS",
         "XIAOZHI_DEVICE_CREDENTIAL",
+        "XIAOZHI_LOCAL_ASR_MODEL",
+        "XIAOZHI_LOCAL_LLM_GGUF",
+        "XIAOZHI_LOCAL_TTS_DIR",
+        "XIAOZHI_ISOLATED_TLS_CERT",
+        "XIAOZHI_ISOLATED_TLS_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     yield

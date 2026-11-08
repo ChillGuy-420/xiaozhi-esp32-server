@@ -169,6 +169,7 @@ class OTAHandler(BaseHandler):
                 return response
             token = self.auth.generate_token(client_id, device_id)
             port = int(self.config["server"].get("port", 8000))
+            scheme = "wss" if self.config["server"].get("isolated_tls") else "ws"
             body = {
                 "server_time": {
                     "timestamp": int(round(time.time() * 1000)),
@@ -176,7 +177,7 @@ class OTAHandler(BaseHandler):
                 },
                 "firmware": {"version": "0.0.0", "url": ""},
                 "websocket": {
-                    "url": f"ws://127.0.0.1:{port}/xiaozhi/v1/",
+                    "url": f"{scheme}://127.0.0.1:{port}/xiaozhi/v1/",
                     "token": token,
                 },
             }

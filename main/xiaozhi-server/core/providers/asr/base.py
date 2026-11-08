@@ -287,7 +287,14 @@ class ASRProviderBase(ABC):
 
         if persistence_disabled():
             try:
-                text, _ = await self.speech_to_text(pcm_data, session_id, None)
+                combined = b"".join(pcm_data)
+                artifacts = ASRProviderBase.AudioArtifacts(
+                    pcm_frames=list(pcm_data),
+                    pcm_bytes=combined,
+                    file_path=None,
+                    temp_path=None,
+                )
+                text, _ = await self.speech_to_text(pcm_data, session_id, artifacts)
                 return text, None
             except Exception:
                 logger.bind(tag=TAG).error("语音识别失败")

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import ssl
 
 import websockets
 from config.logger import setup_logging
@@ -17,6 +18,18 @@ class SuppressInvalidHandshakeFilter(logging.Filter):
             "line without CRLF",
         ]
         return not any(keyword in msg for keyword in suppress_keywords)
+
+
+def _loopback_ssl_context(config: dict, host: str):
+    tls = (config.get("server") or {}).get("isolated_tls") or {}
+    if not tls:
+        return None
+    if not isolation_active(config) or host not in {"127.0.0.1", "::1", "localhost"}:
+        raise IsolatedProfileError("TLS is only available for the isolated loopback profile")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(tls["cert"], tls["key"])
+    return context
 
 
 def _setup_websockets_logger():
@@ -83,15 +96,17 @@ class WebSocketServer:
                 raise IsolatedProfileError("isolated profile enabled but not applied")
             if host not in {"127.0.0.1", "::1", "localhost"}:
                 raise IsolatedProfileError(
-                    "isolated profile refuses non-loopback bind; TLS termination is not implemented"
+                    "isolated profile refuses non-loopback bind"
                 )
 
+        ssl_context = _loopback_ssl_context(self.config, host)
         async with websockets.serve(
             self._handle_connection,
             host,
             port,
             process_request=self._http_response,
             ping_interval=None,
+            ssl=ssl_context,
         ):
             await asyncio.Future()
 

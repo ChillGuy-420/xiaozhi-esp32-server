@@ -124,10 +124,16 @@ async def main():
         websocket_port = int(server_config.get("port", 8000))
 
     if isolated:
+        scheme = "wss" if config.get("server", {}).get("isolated_tls") else "ws"
         logger.bind(tag=TAG).info(
-            "Websocket地址是\tws://127.0.0.1:{}/xiaozhi/v1/",
+            "Websocket地址是\t{}://127.0.0.1:{}/xiaozhi/v1/",
+            scheme,
             websocket_port,
         )
+        if scheme == "wss":
+            logger.bind(tag=TAG).info(
+                "这是回环 TLS。ESP32 证书发放尚未实作。"
+            )
     else:
         logger.bind(tag=TAG).info(
             "Websocket地址是\tws://{}:{}/xiaozhi/v1/",

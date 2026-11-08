@@ -39,7 +39,10 @@ server:
   # 启用方式：环境变量 XIAOZHI_ISOLATED_PROFILE=1，或把 enabled 设为 true。
   # 启用后必须同时提供 XIAOZHI_AUTH_KEY 与 XIAOZHI_ISOLATED_DEVICES_FILE。
   # 设备清单只写 credential_env 名称，不能写密钥。非 loopback 绑定会被拒绝。
-  # 本档不实现 TLS，也不连接外部语音供应商，直到另外核准并改配置。
+  # 未设定本机模型时使用空实作，不能对话，也不会改连 Edge 或云端。
+  # 三项要同时设定绝对路径：XIAOZHI_LOCAL_ASR_MODEL、XIAOZHI_LOCAL_LLM_GGUF、XIAOZHI_LOCAL_TTS_DIR。
+  # 回环 TLS 只用于本机测试证书：XIAOZHI_ISOLATED_TLS_CERT 与 XIAOZHI_ISOLATED_TLS_KEY。
+  # 这不是 ESP32 的正式证书部署。
   isolated_profile:
     enabled: false
  # MQTT网关配置，用于通过OTA下发到设备，根据mqtt_gateway的.env文件配置，格式为host:port
